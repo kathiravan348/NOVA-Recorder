@@ -3,7 +3,7 @@
 Every `poll_seconds` it reads `sync_state`. On a weekday between 08:59 and 15:31 IST (NOVA D90:
 connect before the 09:00 pre-open and keep the 09:15–15:30 regular session inside the window),
 with `enabled` on and a live session (`expires_at` in the future), it opens a `recordings` row and
-records until 15:31 or `enabled` goes off. A push that changes the session or the list ends the
+records until 15:31 or `enabled` goes off. A push with a different live session or list ends the
 recording at the next check; the next recording connects at once with the new values.
 A failed recording is retried after 10 s, 30 s, then every 60 s (NOVA D79).
 """
@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from websockets.asyncio.client import connect
 
@@ -201,19 +202,27 @@ class RecorderLoop:
         self._finish(recording_id, error, started, restart=ended == "changed")
 
     def _ended(self, recording_id: int, target: Target, now: datetime) -> str | None:
-        """None while the recording goes on; else "off", "gone" or "changed" (a new push)."""
-        with self.factory() as db:
-            recording = db.get(Recording, recording_id)
-            if recording is None or recording.status != "running":
-                return "gone"
-            state = db.get(SyncState, 1)
-            if state is None or not state.enabled:
-                return "off"
-            try:
-                current = load_target(db, now)
-            except ValueError:
-                return "changed"
-            return None if current == target else "changed"
+        """None while the recording goes on; else "off", "gone" or "changed" (a new push).
+
+        Only `enabled: false` stops recording. A push without a live session or stocks keeps the
+        working connection, and a database error never drops it (the next check tries again).
+        """
+        try:
+            with self.factory() as db:
+                recording = db.get(Recording, recording_id)
+                if recording is None or recording.status != "running":
+                    return "gone"
+                state = db.get(SyncState, 1)
+                if state is None or not state.enabled:
+                    return "off"
+                try:
+                    current = load_target(db, now)
+                except ValueError:
+                    return None
+                return None if current == target else "changed"
+        except SQLAlchemyError:
+            logger.warning("Checking the recording failed; still recording", exc_info=True)
+            return None
 
     def _finish(
         self, recording_id: int, error: str | None, started: datetime, restart: bool

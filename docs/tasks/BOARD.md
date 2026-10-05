@@ -7,7 +7,7 @@
 
 | ID | Title | Status | Owner | Depends on |
 |---|---|---|---|---|
-| REC-001 | Recorder runs on its own: stack, database, sync API, recording loop | in-review | Claude | NOVA-222 |
+| REC-001 | Recorder runs on its own: stack, database, sync API, recording loop | done | Claude | NOVA-222 |
 | REC-002 | Recorded days: list, export, mark imported, delete after 7 days | planned | — | REC-001 |
 
 ## Order and notes

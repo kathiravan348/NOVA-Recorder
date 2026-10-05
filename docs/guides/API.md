@@ -1,6 +1,6 @@
 # Recorder — API reference (internal API for NOVA)
 
-> State as of 5 Oct 2026 (REC-001). Service `rec-api`, host port `127.0.0.1:8100` (`REC_API_PORT`).
+> State as of 5 Oct 2026 (REC-001, review). Service `rec-api`, host port `127.0.0.1:8100` (`REC_API_PORT`).
 > NOVA's broker calls it at `http://host.docker.internal:8100`. Changing anything here needs a matching
 > NOVA task (`AGENTS.md` §4).
 
@@ -32,10 +32,11 @@ appears twice (tokens across stocks and indices together); `accessTokenSealed` i
 is missing with a token; or the token cannot be opened with Recorder's `NOVA_BROKER_TOKEN_KEY` (the keys
 differ). A refused sync changes nothing. `accessTokenSealed: null` stores no session (`expiresAt` ignored).
 
-**A sync during a recording:** a push with the same session and list changes nothing. A push that changes
-the session (token, API key, or a session that is no longer live) or the list ends the running recording
-within 5 s, and the next recording connects at once with the new values (a gap of a few seconds).
-`enabled: false` ends it without a new one.
+**A sync during a recording:** a push with the same session and list changes nothing. A push with a
+different live session (token or API key) or a different list ends the running recording within 5 s,
+and the next recording connects at once with the new values (a gap of a few seconds). `enabled: false` ends
+it without a new one. A push without a live session or without stocks keeps the running connection (the new
+values apply from the next recording).
 
 **`Status`**
 ```

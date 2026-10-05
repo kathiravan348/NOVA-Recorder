@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 from conftest import ACCESS_TOKEN, API_KEY, FRIDAY_10_IST, Clock
-from sqlalchemy import Engine, func, select, text, update
+from sqlalchemy import Engine, delete, func, select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from nova_rec import db as rec_db
@@ -246,6 +247,47 @@ def test_a_new_session_or_list_reconnects_at_once_with_it(engine: Engine, key: s
     assert loop.retry_at == clock.at and loop._wait_seconds() == 0
     loop.record = lambda url, tokens, sink, should_stop: None
     assert loop.step() is not None  # no wait for the next poll
+
+
+def test_a_push_without_a_session_keeps_the_running_connection(engine: Engine, key: str) -> None:
+    push(engine, key)
+
+    def script(sink: Sink, should_stop: Callable[[], bool], clock: Clock) -> None:
+        with Session(engine) as db:
+            db.execute(update(SyncState).values(access_token_encrypted=None, expires_at=None))
+            db.execute(delete(RecStock))
+            db.commit()
+        clock.at += timedelta(seconds=6)
+        assert not should_stop()
+        clock.at = AT_1531
+        assert should_stop()
+
+    loop = make_loop(engine, key, Clock(FRIDAY_10_IST), script)
+    recording_id = loop.step()
+
+    assert recording_id is not None and recording(engine, recording_id).status == "completed"
+    assert loop.retry_at is None
+
+
+def test_a_database_error_in_the_check_keeps_recording(engine: Engine, key: str) -> None:
+    push(engine, key)
+    working = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def broken() -> Session:
+        raise OperationalError("SELECT 1", {}, Exception("server closed the connection"))
+
+    def script(sink: Sink, should_stop: Callable[[], bool], clock: Clock) -> None:
+        loop.factory = broken  # type: ignore[assignment]  # every session fails
+        clock.at += timedelta(seconds=6)
+        assert not should_stop()
+        loop.factory = working
+        clock.at = AT_1531
+        assert should_stop()
+
+    loop = make_loop(engine, key, Clock(FRIDAY_10_IST), script)
+    recording_id = loop.step()
+
+    assert recording_id is not None and recording(engine, recording_id).status == "completed"
 
 
 def test_a_failure_fails_the_recording_and_retries_after_10_30_60_seconds(
