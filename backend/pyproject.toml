@@ -1,0 +1,89 @@
+[project]
+name = "nova-rec"
+version = "0.0.1"
+description = "Recorder: live Kite tick recorder for NOVA (R1, NOVA D91)"
+requires-python = "==3.12.*"
+dependencies = [
+    "alembic==1.20.0",
+    "cryptography==50.0.1",
+    "fastapi==0.141.1",
+    "psycopg[binary]==3.3.6",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "sqlalchemy==2.0.54",
+    "uvicorn==0.53.0",
+    "websockets==17.1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2==2.13.1",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "ruff==0.16.8",
+]
+
+[build-system]
+requires = ["uv_build==0.12.18"]
+build-backend = "uv_build"
+
+[tool.uv]
+# Indirect dependencies stay on NOVA's `uv.lock` versions (AGENTS.md §7).
+constraint-dependencies = [
+    "annotated-doc==0.0.5",
+    "annotated-types==0.8.0",
+    "ast-serialize==0.11.2",
+    "anyio==4.15.1",
+    "cffi==2.1.1",
+    "click==8.5.0",
+    "greenlet==3.5.6",
+    "h11==0.16.0",
+    "httpcore2==2.13.1",
+    "idna==3.20",
+    "iniconfig==2.3.0",
+    "librt==0.15.0",
+    "mako==1.4.3",
+    "markupsafe==3.0.3",
+    "mypy-extensions==1.1.0",
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "pycparser==3.0",
+    "pydantic-core==2.46.5",
+    "pygments==2.21.0",
+    "python-dotenv==1.2.3",
+    "starlette==1.7.0",
+    "typing-extensions==4.16.0",
+    "typing-inspection==0.4.4",
+    "tzdata==2026.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Migrations list DDL one column per line; long constraint strings stay readable unwrapped.
+"**/migrations/versions/*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+mypy_path = "src,tests"
+explicit_package_bases = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests import shared helpers from `conftest`.
+pythonpath = ["tests"]
+addopts = ["--import-mode=importlib", "-p", "no:cacheprovider"]
