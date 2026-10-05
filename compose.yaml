@@ -1,0 +1,110 @@
+# Recorder stack (R1, NOVA D91). Copy .env.example to .env first. Shares nothing with NOVA's stack.
+# Every port binds to 127.0.0.1. Running services stay within 1 GB (postgres 512m + recorder 256m +
+# api 128m + migrate 128m); the `tools` profile (rec-test-db, rec-check) runs only for checks.
+# Weekdays 08:55–15:45 IST: never stop, restart, rebuild or recreate these containers (AGENTS.md §1).
+name: nova-rec
+
+x-rec: &rec
+  build: ./backend
+  image: nova-rec:dev
+  environment:
+    REC_DATABASE_URL: postgresql+psycopg://${REC_DB_USER:?set in .env}:${REC_DB_PASSWORD:?set in .env}@rec-postgres:5432/${REC_DB_NAME:?set in .env}
+    REC_INTERNAL_TOKEN: ${REC_INTERNAL_TOKEN:?set in .env}
+    REC_LOG_LEVEL: ${REC_LOG_LEVEL:-info}
+    NOVA_BROKER_TOKEN_KEY: ${NOVA_BROKER_TOKEN_KEY:-}
+
+services:
+  rec-postgres:
+    container_name: rec-postgres
+    image: timescale/timescaledb:2.30.1-pg17
+    environment:
+      POSTGRES_USER: ${REC_DB_USER:?set in .env}
+      POSTGRES_PASSWORD: ${REC_DB_PASSWORD:?set in .env}
+      POSTGRES_DB: ${REC_DB_NAME:?set in .env}
+    volumes:
+      - rec-db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${REC_DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 512m
+
+  # Applies database migrations, then exits; the recorder and API start after it succeeds.
+  rec-migrate:
+    <<: *rec
+    container_name: rec-migrate
+    command: ["python", "-m", "nova_rec", "migrate"]
+    depends_on:
+      rec-postgres:
+        condition: service_healthy
+    mem_limit: 128m
+
+  # Always on: records weekdays 08:59–15:31 IST with the session and list NOVA pushed.
+  # The only process that talks to Kite (WebSocket only).
+  rec-recorder:
+    <<: *rec
+    container_name: rec-recorder
+    command: ["python", "-m", "nova_rec", "recorder"]
+    depends_on:
+      rec-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 15s
+    mem_limit: 256m
+
+  # NOVA's way in (docs/guides/API.md); NOVA's broker calls http://host.docker.internal:8100.
+  rec-api:
+    <<: *rec
+    container_name: rec-api
+    command: ["uvicorn", "--factory", "nova_rec.api:app_factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:${REC_API_PORT:-8100}:8000"
+    depends_on:
+      rec-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 128m
+
+  # Test database server only: tests create and drop throwaway databases here, never on rec-postgres.
+  # Data lives in memory (tmpfs) and is gone when the container stops.
+  rec-test-db:
+    container_name: rec-test-db
+    image: timescale/timescaledb:2.30.1-pg17
+    profiles: ["tools"]
+    environment:
+      POSTGRES_USER: rec_test
+      POSTGRES_PASSWORD: rec_test
+      POSTGRES_DB: postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rec_test -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 256m
+
+  # All checks (ruff, format, mypy strict, pytest) on the mounted code: no rebuild needed.
+  rec-check:
+    <<: *rec
+    container_name: rec-check
+    profiles: ["tools"]
+    environment:
+      REC_DATABASE_URL: postgresql+psycopg://unused@localhost/unused
+      REC_INTERNAL_TOKEN: unused
+      REC_TEST_DATABASE_URL: postgresql+psycopg://rec_test:rec_test@rec-test-db:5432/postgres
+    depends_on:
+      rec-test-db:
+        condition: service_healthy
+    volumes:
+      - .:/repo:ro
+    working_dir: /repo/backend
+    command: ["sh", "scripts/check.sh"]
+    mem_limit: 768m
+
+volumes:
+  rec-db-data:
