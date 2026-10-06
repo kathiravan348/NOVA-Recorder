@@ -1,6 +1,6 @@
-# Recorder — Database (tables; migration 0001)
+# Recorder — Database (tables; migration 0002)
 
-> State as of 5 Oct 2026 (REC-001). Server `rec-postgres` (TimescaleDB 2.30.1, PostgreSQL 17),
+> State as of 6 Oct 2026 (REC-002). Server `rec-postgres` (TimescaleDB 2.30.1, PostgreSQL 17),
 > `127.0.0.1:5433`, volume `rec-db-data`. Migrations: `backend/src/nova_rec/migrations/versions/`
 > (`python -m nova_rec migrate`, run by `rec-migrate`). Tests use `rec-test-db` only.
 
@@ -39,3 +39,21 @@ A sync replaces all three in one transaction.
 | Table | Columns | Notes |
 |---|---|---|
 | `recordings` | `id` bigint identity PK, `started_at` timestamptz, `finished_at` timestamptz null, `status` text (`running`/`completed`/`failed`), `error` text null (≤ 500 chars), `rows_written` bigint default 0 | One run of the recorder loop; `rows_written` counts stock ticks only. A row left `running` by a stopped recorder is set `failed` on restart. |
+
+## Recorded days (migration 0002, R2)
+
+| Table | Columns | Notes |
+|---|---|---|
+| `recorded_days` | `day` date PK; `ticks`, `index_ticks`, `stocks` bigint; `closed_at` timestamptz; `imported_at`, `delete_requested_at`, `deleted_at` timestamptz null | Frozen counts and manual deletion state; retained after ticks are deleted. |
+
+`day` is the IST date of `received_at` (00:00 inclusive to the next 00:00 exclusive). Outside the
+recording window and with no running recording, the loop closes weekdays with stock ticks, up to today
+after 15:31 IST; counts never change after closure. `stocks` counts distinct stock symbols.
+
+An import confirmation sets `imported_at` only when both counts match; repeats keep the first time.
+A separate NOVA delete request sets `delete_requested_at`, only for an imported day or when NOVA confirms
+it already holds the day (`novaHasDay`). There is no automatic expiry or deletion after import.
+Outside the recording window, the loop drops only Timescale chunks wholly contained in the requested
+IST day and deletes the remaining boundary rows from both tick tables, then sets `deleted_at` in the same
+transaction. Adjacent days remain intact. Active export locks delay deletion until streaming ends.
+Maintenance is serialized with a transaction advisory lock; failed maintenance rolls back and retries.

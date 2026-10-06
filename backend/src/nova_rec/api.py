@@ -4,7 +4,7 @@ import base64
 import binascii
 import hmac
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -13,11 +13,13 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.responses import StreamingResponse
 
 from nova_rec.crypto import TokenCipher
+from nova_rec.days import confirm_import, export_day, request_delete, stock_counts
 from nova_rec.db import create_db_engine, create_session_factory
 from nova_rec.loop import IST, MAX_INSTRUMENTS
-from nova_rec.models import RecIndex, Recording, RecStock, SyncState
+from nova_rec.models import RecIndex, RecordedDay, Recording, RecStock, SyncState
 from nova_rec.settings import Settings, get_settings
 
 State = Literal["off", "waiting", "recording", "no_login"]
@@ -60,6 +62,27 @@ class StatusOut(Wire):
     today_ticks: int
     # The latest recording's error; null when it ran or runs without one.
     last_error: str | None
+
+
+class DayOut(Wire):
+    model_config = ConfigDict(from_attributes=True)
+    day: date
+    ticks: int
+    index_ticks: int
+    stocks: int
+    closed_at: datetime
+    imported_at: datetime | None
+    delete_requested_at: datetime | None
+    deleted_at: datetime | None
+
+
+class ImportIn(Wire):
+    ticks: int = Field(ge=0, strict=True)
+    index_ticks: int = Field(ge=0, strict=True)
+
+
+class DeleteIn(Wire):
+    nova_has_day: bool = Field(strict=True)
 
 
 def _bad(message: str) -> HTTPException:
@@ -188,6 +211,33 @@ def create_app(
     @app.get("/internal/status", dependencies=guarded)
     def get_status(db: Db) -> StatusOut:
         return read_status(db, now())
+
+    @app.get("/internal/days", dependencies=guarded)
+    def list_days(db: Db) -> list[DayOut]:
+        return [
+            DayOut.model_validate(row)
+            for row in db.scalars(select(RecordedDay).order_by(RecordedDay.day.desc()))
+        ]
+
+    @app.get("/internal/days/{day}/stocks", dependencies=guarded)
+    def get_stocks(day: date, db: Db) -> list[dict[str, str | int]]:
+        return stock_counts(db, day)
+
+    @app.get("/internal/days/{day}/ticks", dependencies=guarded)
+    def get_ticks(day: date) -> StreamingResponse:
+        return export_day(factory, day, indices=False)
+
+    @app.get("/internal/days/{day}/index-ticks", dependencies=guarded)
+    def get_index_ticks(day: date) -> StreamingResponse:
+        return export_day(factory, day, indices=True)
+
+    @app.post("/internal/days/{day}/imported", dependencies=guarded)
+    def imported(day: date, body: ImportIn, db: Db) -> DayOut:
+        return DayOut.model_validate(confirm_import(db, day, body.ticks, body.index_ticks, now()))
+
+    @app.post("/internal/days/{day}/delete", status_code=202, dependencies=guarded)
+    def delete_day(day: date, body: DeleteIn, db: Db) -> DayOut:
+        return DayOut.model_validate(request_delete(db, day, body.nova_has_day, now()))
 
     return app
 

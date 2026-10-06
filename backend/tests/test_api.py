@@ -1,5 +1,6 @@
 """`rec-api`: health, token check, sync replace and limits, status states."""
 
+import asyncio
 import base64
 from collections.abc import Iterator
 from datetime import timedelta
@@ -7,12 +8,16 @@ from datetime import timedelta
 import pytest
 from conftest import FRIDAY_10_IST, TOKEN, Clock, sync_body
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.types import Message
+from test_days import DAY, PATH, maintenance, seed
 
 from nova_rec.api import create_app
 from nova_rec.crypto import TokenCipher, new_key
-from nova_rec.models import Recording, RecStock, SyncState
+from nova_rec.days import export_day, get_day
+from nova_rec.models import Recording, RecStock, SyncState, Tick
 from nova_rec.settings import Settings
 
 AUTH = {"x-rec-internal-token": TOKEN}
@@ -42,6 +47,13 @@ def test_internal_calls_without_the_token_get_401(
     assert client.put("/internal/sync", json=sync_body(key), headers=headers).status_code == 401
     assert client.put("/internal/sync", json={}, headers=headers).status_code == 401
     assert client.get("/internal/status", headers=headers).status_code == 401
+    for suffix in ["", "/2026-09-25/stocks", "/2026-09-25/ticks", "/2026-09-25/index-ticks"]:
+        assert client.get("/internal/days" + suffix, headers=headers).status_code == 401
+    for suffix in ["imported", "delete"]:
+        assert (
+            client.post(f"/internal/days/2026-09-25/{suffix}", json={}, headers=headers).status_code
+            == 401
+        )
 
 
 def test_sync_stores_the_session_still_sealed_and_the_selection(
@@ -124,6 +136,27 @@ def test_unknown_fields_are_refused(client: TestClient, key: str) -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "suffix, body",
+    [
+        ("imported", {"ticks": -1, "indexTicks": 0}),
+        ("imported", {"ticks": "3", "indexTicks": 0}),
+        ("imported", {"ticks": 3, "indexTicks": 0, "extra": True}),
+        ("delete", {"novaHasDay": "true"}),
+        ("delete", {"novaHasDay": True, "extra": True}),
+    ],
+)
+def test_day_request_validation(client: TestClient, suffix: str, body: dict[str, object]) -> None:
+    assert (
+        client.post(f"/internal/days/2026-09-25/{suffix}", json=body, headers=AUTH).status_code
+        == 422
+    )
+
+
+def test_invalid_day_is_422(client: TestClient) -> None:
+    assert client.get("/internal/days/not-a-date/ticks", headers=AUTH).status_code == 422
+
+
 def test_status_states(client: TestClient, engine: Engine, key: str, clock: Clock) -> None:
     def state() -> str:
         return str(client.get("/internal/status", headers=AUTH).json()["state"])
@@ -159,3 +192,60 @@ def test_status_counts_only_todays_ticks_and_shows_the_last_error(
     status = client.get("/internal/status", headers=AUTH).json()
     assert status["todayTicks"] == 5 and status["lastError"] == "socket refused"
     assert status["sessionExpiresAt"] is not None and status["state"] == "waiting"
+
+
+def test_list_stocks_import_and_no_automatic_deletion(
+    engine: Engine, client: TestClient, clock: Clock
+) -> None:
+    seed(engine)
+    seed(engine, FRIDAY_10_IST - timedelta(days=1))
+    maintenance(engine)
+    days = client.get("/internal/days", headers=AUTH).json()
+    assert [d["day"] for d in days] == [str(DAY), str(DAY - timedelta(days=1))]
+    assert set(days[0]) == {
+        "day",
+        "ticks",
+        "indexTicks",
+        "stocks",
+        "closedAt",
+        "importedAt",
+        "deleteRequestedAt",
+        "deletedAt",
+    }
+    assert client.get(PATH + "/stocks", headers=AUTH).json() == [
+        {"symbol": "INFY", "ticks": 2},
+        {"symbol": "TCS", "ticks": 1},
+    ]
+    bad = client.post(PATH + "/imported", json={"ticks": 2, "indexTicks": 1}, headers=AUTH)
+    assert bad.status_code == 409 and bad.json()["detail"] == {"ticks": 3, "indexTicks": 1}
+    good = client.post(PATH + "/imported", json={"ticks": 3, "indexTicks": 1}, headers=AUTH)
+    assert good.status_code == 200
+    clock.at += timedelta(days=30)
+    again = client.post(PATH + "/imported", json={"ticks": 3, "indexTicks": 1}, headers=AUTH)
+    assert again.json()["importedAt"] == good.json()["importedAt"]
+    maintenance(engine, clock.at)
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(Tick)) == 6
+        assert get_day(db, DAY).deleted_at is None
+
+
+def test_export_lock_is_released_on_disconnect_before_first_chunk(engine: Engine) -> None:
+    seed(engine)
+    maintenance(engine)
+    response = export_day(sessionmaker(engine), DAY, indices=False)
+    with Session(engine) as db:
+        db.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(OperationalError):
+            get_day(db, DAY, lock=True)  # a deletion request cannot take the export's lock
+
+    async def receive() -> Message:
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        raise RuntimeError("client gone")
+
+    with pytest.raises(RuntimeError, match="client gone"):
+        asyncio.run(response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send))
+    with Session(engine) as db:
+        db.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        assert get_day(db, DAY, lock=True).ticks == 3

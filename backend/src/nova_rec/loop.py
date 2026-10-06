@@ -13,9 +13,8 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -24,14 +23,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from websockets.asyncio.client import connect
 
 from nova_rec.crypto import TokenCipher
+from nova_rec.days import IST as IST
+from nova_rec.days import in_recording_window as in_recording_window
+from nova_rec.days import maintain_days
 from nova_rec.models import IndexTick, RecIndex, Recording, RecStock, SyncState, Tick
 from nova_rec.recorder import Recorder, Sink, kite_url
 
 logger = logging.getLogger("nova.rec.loop")
 
-IST = ZoneInfo("Asia/Kolkata")
-RECORD_START = time(8, 59)
-RECORD_END = time(15, 31)
 CHECK_SECONDS = 5.0
 # Waits after consecutive failed recordings; a recording that ran RESET_AFTER starts again at 10 s.
 RETRY_STEPS = (timedelta(seconds=10), timedelta(seconds=30), timedelta(seconds=60))
@@ -43,12 +42,6 @@ STOPPED = "Recorder stopped before the session ended; it resumes on restart"
 
 # (url, instrument token → symbol, sink, should_stop): records until should_stop() is true.
 Record = Callable[[str, dict[int, str], Sink, Callable[[], bool]], None]
-
-
-def in_recording_window(now: datetime) -> bool:
-    """Weekday 08:59–15:31 IST: connect before the 09:00 pre-open (NOVA D90)."""
-    local = now.astimezone(IST)
-    return local.weekday() < 5 and RECORD_START <= local.time() < RECORD_END
 
 
 @dataclass(frozen=True)
@@ -133,6 +126,14 @@ class RecorderLoop:
     def step(self) -> int | None:
         """Starts and runs one recording when it should; returns its id, or None."""
         now = self.now()
+        if not in_recording_window(now):
+            try:
+                with self.factory() as db:
+                    maintain_days(db, now)
+                    db.commit()
+            except SQLAlchemyError:
+                logger.warning("Day maintenance failed; will retry", exc_info=True)
+            return None
         if self.cipher is None:
             return None
         if self.retry_at is not None:

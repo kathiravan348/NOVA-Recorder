@@ -1,10 +1,11 @@
 """Tables: `ticks`/`index_ticks` exactly as NOVA has them (R1 (3)), the pushed sync, recordings."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     Identity,
     Integer,
@@ -140,3 +141,18 @@ class Recording(Base):
     status: Mapped[str]
     error: Mapped[str | None]
     rows_written: Mapped[int] = mapped_column(BigInteger, server_default="0")
+
+
+class RecordedDay(Base):
+    """Frozen IST day counts; retained after NOVA requests deletion (R2)."""
+
+    __tablename__ = "recorded_days"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    ticks: Mapped[int] = mapped_column(BigInteger)
+    index_ticks: Mapped[int] = mapped_column(BigInteger)
+    stocks: Mapped[int] = mapped_column(BigInteger)
+    closed_at: Mapped[datetime]
+    imported_at: Mapped[datetime | None]
+    delete_requested_at: Mapped[datetime | None]
+    deleted_at: Mapped[datetime | None]

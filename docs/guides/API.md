@@ -1,6 +1,6 @@
 # Recorder — API reference (internal API for NOVA)
 
-> State as of 5 Oct 2026 (REC-001, review). Service `rec-api`, host port `127.0.0.1:8100` (`REC_API_PORT`).
+> State as of 6 Oct 2026 (REC-002). Service `rec-api`, host port `127.0.0.1:8100` (`REC_API_PORT`).
 > NOVA's broker calls it at `http://host.docker.internal:8100`. Changing anything here needs a matching
 > NOVA task (`AGENTS.md` §4).
 
@@ -17,6 +17,35 @@
 | `GET /health` | Liveness, no token | — | `{"status": "ok"}` |
 | `PUT /internal/sync` | NOVA's push: replaces `sync_state`, `rec_stocks` and `rec_indices` in one transaction | `SyncIn` | `Status` |
 | `GET /internal/status` | What Recorder is doing now | — | `Status` |
+| `GET /internal/days` | Closed days, newest first; includes deleted days | — | `Day[]` |
+| `GET /internal/days/{day}/stocks` | Stock counts for the closed IST day, sorted by symbol | — | `[{symbol, ticks}]` |
+| `GET /internal/days/{day}/ticks` | Stream stock ticks using PostgreSQL binary COPY | — | `application/octet-stream`, `X-Row-Count` |
+| `GET /internal/days/{day}/index-ticks` | Stream index ticks using PostgreSQL binary COPY | — | `application/octet-stream`, `X-Row-Count` |
+| `POST /internal/days/{day}/imported` | Confirm matching counts; preserve the first import time | `{ticks, indexTicks}` | `200 Day` |
+| `POST /internal/days/{day}/delete` | Request deletion; the recorder loop removes data outside the recording window | `{novaHasDay: bool}` | `202 Day` |
+
+**Recorded days (REC-002; NOVA-224 / NOVA-227)**
+`day` is an IST date (`YYYY-MM-DD`), derived from `received_at`, from midnight inclusive to the next
+midnight exclusive. The loop closes weekdays with stock ticks outside the recording window, when no
+recording is running; today becomes eligible at 15:31 IST. Counts freeze at closure.
+```
+Day = { day: date, ticks: int, indexTicks: int, stocks: int, closedAt: datetime,
+        importedAt: datetime | null, deleteRequestedAt: datetime | null, deletedAt: datetime | null }
+```
+- An unknown or open day returns `404 {"detail": "Day not closed"}`. Invalid dates or bodies return 422.
+- Binary exports use explicit columns in the same order as the tick tables (DATABASE.md), sorted by
+  `received_at`. The stream includes the binary COPY header and trailer; it is ready for `COPY … FROM STDIN
+  (FORMAT binary)`. `X-Row-Count` is the corresponding frozen count. Empty tables still return valid COPY.
+  The database cursor sends chunks incrementally; an active export prevents deletion until it ends.
+- Import counts must be nonnegative integers equal to the frozen counts, else
+  `409 {"detail": {"ticks": <expected>, "indexTicks": <expected>}}`. Repeated confirmations keep the
+  first `importedAt`. After a deletion request, confirmation returns 409 `Day deletion requested`.
+- Deletion is manual only (R2): a closed day must have `importedAt`, or NOVA must send `novaHasDay: true`
+  because it already holds that day from its own recorder. Otherwise return 409 `Day not imported`.
+  The request only sets `deleteRequestedAt`; repeated requests keep its first value, including after
+  deletion. There is no retention timer, and import alone never deletes data.
+- After a deletion request, stocks and both exports return 410 `Day deletion requested`. The loop later
+  removes the day's ticks, sets `deletedAt`, and keeps its registry row and frozen counts.
 
 **`SyncIn`**
 ```
