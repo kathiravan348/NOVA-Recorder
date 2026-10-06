@@ -8,7 +8,7 @@
 | ID | Title | Status | Owner | Depends on |
 |---|---|---|---|---|
 | REC-001 | Recorder runs on its own: stack, database, sync API, recording loop | done | Claude | NOVA-222 |
-| REC-002 | Recorded days: list, export, mark imported, delete on request (R2) | in-progress | ChatGPT | REC-001 |
+| REC-002 | Recorded days: list, export, mark imported, delete on request (R2) | ready-for-review | ChatGPT | REC-001 |
 
 ## Order and notes
 - REC-001 → REC-002, then NOVA-223 → 224 → 225 → 226 on NOVA's board (NOVA D91).
