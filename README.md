@@ -1,7 +1,7 @@
 # Recorder
 
 Live Kite tick recorder for NOVA, a private trading platform for one family. It records the stocks and indices
-NOVA pushes each morning, keeps every day until NOVA imports it (plus 7 days), and talks only to NOVA.
+NOVA pushes each morning, keeps every day until the Owner deletes it from NOVA Relay, and talks only to NOVA.
 
 - Rules for agents: `AGENTS.md`, then `CLAUDE.md`, `CHATGPT.md` or `GEMINI.md`.
 - Tasks: `docs/tasks/BOARD.md`. Decisions: `docs/DECISIONS.md` (R1 = NOVA D91).
