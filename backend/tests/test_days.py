@@ -138,6 +138,19 @@ def test_ist_boundaries_weekends_and_previous_days(engine: Engine) -> None:
         assert db.get(RecordedDay, DAY + timedelta(days=1)) is None
 
 
+def test_index_only_day_closes_and_scan_starts_after_last_closed_day(engine: Engine) -> None:
+    with Session(engine) as db:
+        db.add(IndexTick(symbol="NIFTY 50", received_at=FRIDAY_10_IST, last_price_paise=1))
+        db.commit()
+    maintenance(engine)
+    with Session(engine) as db:
+        assert (get_day(db, DAY).ticks, get_day(db, DAY).index_ticks) == (0, 1)
+    seed(engine, FRIDAY_10_IST - timedelta(days=1))  # older than the last closed day
+    maintenance(engine, CLOSE + timedelta(days=3))
+    with Session(engine) as db:
+        assert db.get(RecordedDay, DAY - timedelta(days=1)) is None
+
+
 @pytest.mark.parametrize("indices", [False, True])
 def test_export_binary_copy_round_trips_every_column(
     engine: Engine, client: TestClient, indices: bool

@@ -47,8 +47,9 @@ A sync replaces all three in one transaction.
 | `recorded_days` | `day` date PK; `ticks`, `index_ticks`, `stocks` bigint; `closed_at` timestamptz; `imported_at`, `delete_requested_at`, `deleted_at` timestamptz null | Frozen counts and manual deletion state; retained after ticks are deleted. |
 
 `day` is the IST date of `received_at` (00:00 inclusive to the next 00:00 exclusive). Outside the
-recording window and with no running recording, the loop closes weekdays with stock ticks, up to today
-after 15:31 IST; counts never change after closure. `stocks` counts distinct stock symbols.
+recording window and with no running recording, the loop closes weekdays with stock or index ticks, up to today
+after 15:31 IST; counts never change after closure. `stocks` counts distinct stock symbols. Days close
+in order: only ticks after the last closed day are scanned, so a late tick for an older day is ignored.
 
 An import confirmation sets `imported_at` only when both counts match; repeats keep the first time.
 A separate NOVA delete request sets `delete_requested_at`, only for an imported day or when NOVA confirms

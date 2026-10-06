@@ -26,7 +26,7 @@
 
 **Recorded days (REC-002; NOVA-224 / NOVA-227)**
 `day` is an IST date (`YYYY-MM-DD`), derived from `received_at`, from midnight inclusive to the next
-midnight exclusive. The loop closes weekdays with stock ticks outside the recording window, when no
+midnight exclusive. The loop closes weekdays with stock or index ticks outside the recording window, when no
 recording is running; today becomes eligible at 15:31 IST. Counts freeze at closure.
 ```
 Day = { day: date, ticks: int, indexTicks: int, stocks: int, closedAt: datetime,

@@ -79,11 +79,19 @@ def close_days(db: Session, now: datetime) -> None:
     """Only finish weekdays with data, after their recording window has ended."""
     local = now.astimezone(IST)
     cutoff = local.date() if local.time() >= RECORD_END else local.date() - timedelta(days=1)
-    day_expr = func.date(func.timezone("Asia/Kolkata", Tick.received_at))
-    candidates = db.scalars(
-        select(day_expr).where(day_expr <= cutoff).distinct().order_by(day_expr)
-    )
-    for day in candidates:
+    # Days close in order, so only ticks after the last closed day are scanned (this runs every
+    # loop step outside the window; a full-table scan would grow with every kept day).
+    last = db.scalar(select(func.max(RecordedDay.day)))
+    upper = bounds(cutoff)[1]
+    lower = bounds(last + timedelta(days=1))[0] if last is not None else None
+    candidates: set[date] = set()
+    for table in (Tick, IndexTick):
+        day_expr = func.date(func.timezone("Asia/Kolkata", table.received_at))
+        query = select(day_expr).where(table.received_at < upper).distinct()
+        if lower is not None:
+            query = query.where(table.received_at >= lower)
+        candidates.update(db.scalars(query))
+    for day in sorted(candidates):
         if day.weekday() >= 5 or db.get(RecordedDay, day) is not None:
             continue
         start, end = bounds(day)
