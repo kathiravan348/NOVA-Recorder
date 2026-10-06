@@ -5,8 +5,8 @@
 > for one family (`C:\Users\kathi\Dev\Projects\NOVA`). Why it is a separate repo: `docs/DECISIONS.md` R1 (NOVA D91).
 
 ## 1. Scope and primary rule
-**Scope:** record Kite live ticks for the selection NOVA pushes; keep each day until NOVA has imported it, plus
-7 days. No UI, backtests, orders or Kite calls other than the WebSocket. NOVA is the only client.
+**Scope:** record Kite live ticks for the selection NOVA pushes; keep each day until the Owner deletes it from
+NOVA Relay (R2: manual delete only). No UI, backtests, orders or Kite calls other than the WebSocket. NOVA is the only client.
 Kite has no tick history (NOVA D11): a tick not recorded is lost for good.
 
 **Primary rule — recording never stops.** On weekdays 08:55–15:45 IST never stop, restart, rebuild or recreate
@@ -107,7 +107,7 @@ replace outdated text, do not append history. Nothing changed: write `Guides: no
 ## 11. Never
 - Never stop, restart, rebuild or recreate a `nova-rec` container on weekdays 08:55–15:45 IST (§1).
 - Never `docker compose down -v` or delete `rec-db-data`: it holds days NOVA has not imported yet.
-- Never delete a day NOVA has not confirmed as imported, or earlier than 7 days after the import.
+- Never delete a day without a delete request from NOVA; refuse one for a day neither imported nor marked `novaHasDay` (R2).
 - Never place, modify or cancel orders, and never call Kite except the tick WebSocket.
 - Never touch NOVA's repo, containers, database or volumes from a Recorder task.
 - Never put keys, secrets or tokens in code, logs, fixtures or commits (§5).
